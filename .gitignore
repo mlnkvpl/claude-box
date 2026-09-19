@@ -1,0 +1,11 @@
+# Environment variables and API secrets
+.env
+*.env.local
+
+# Sandbox state, history, and projects registry
+.config/*
+!.config/.gitkeep
+
+# Operating system / Editor noise
+.DS_Store
+*.log

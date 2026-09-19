@@ -1,0 +1,17 @@
+services:
+  claude:
+    build: .
+    user: "${UID:-1000}:${GID:-1000}"
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+    volumes:
+      - ~/workdir:/workspace
+      - ./.config/claude:/home/node/.claude
+      - ./.config/claude.json:/home/node/.claude.json
+      - ./.mcp.json:/workspace/.mcp.json:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
