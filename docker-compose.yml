@@ -1,17 +1,55 @@
 services:
+  # Docker-outside-of-Docker access, scoped. Holds the real host socket
+  # itself; `claude` never sees it directly — it only talks to this proxy
+  # over DOCKER_HOST. Grants write access to containers/images/networks/
+  # volumes/build/exec (what `docker compose up`, `docker exec`, etc. inside
+  # ululua's/traefik's own CLIs actually need); everything else (swarm,
+  # secrets, plugins, system, nodes, services, tasks, configs) stays at the
+  # proxy's default-deny. See cli.sh's chosen invocations for the exact
+  # commands this needs to cover.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: claude-box-docker-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - VOLUMES=1
+      - BUILD=1
+      - EXEC=1
+      - POST=1
+
   claude:
     build: .
     user: "${UID:-1000}:${GID:-1000}"
-    working_dir: /workspace
+    # Must be the SAME absolute path on both sides of the volume mount below,
+    # not a convenience alias like /workspace. Docker-outside-of-Docker means
+    # `docker compose` run in here is ultimately executed by the HOST's own
+    # daemon (via docker-socket-proxy) — it resolves any relative bind mount
+    # in a compose file (e.g. ululua's `./projects/api:/var/www/html`)
+    # against whatever this working directory string means to THAT daemon,
+    # i.e. on the host's filesystem. If the container-side path didn't match
+    # the host-side path, those mounts would silently point at a
+    # nonexistent/empty host directory instead of the real project files.
+    # cli.sh exports HOST_WORKDIR="$HOME/workdir" before every invocation.
+    working_dir: ${HOST_WORKDIR}
     stdin_open: true
     tty: true
+    depends_on:
+      - docker-socket-proxy
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
     volumes:
-      - ~/workdir:/workspace
+      - ${HOST_WORKDIR}:${HOST_WORKDIR}
       - ./.config/claude:/home/node/.claude
       - ./.config/claude.json:/home/node/.claude.json
-      - ./.mcp.json:/workspace/.mcp.json:ro
+      - ./.mcp.json:${HOST_WORKDIR}/.mcp.json:ro
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+      # Where the docker CLI/compose plugin inside this container send every
+      # command — the scoped proxy above, not a mounted socket.
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375

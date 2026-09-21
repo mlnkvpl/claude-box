@@ -30,25 +30,24 @@ RUN curl -sSL https://packages.sury.org/php/apt.gpg -o /etc/apt/trusted.gpg.d/ph
 RUN curl -sSL "https://dl.filippo.io/mkcert/latest?for=linux/amd64" -o /usr/local/bin/mkcert \
     && chmod +x /usr/local/bin/mkcert
 
-# --- Docker CLI + daemon — deliberately NOT enabled ---
-# A `docker` client alone can't run `docker compose up` without something to
-# talk to — either Docker-in-Docker (needs privileged/special runtime
-# capabilities) or mounting the host's docker.sock into this container,
-# which is effectively root-equivalent host access (the same tradeoff as the
-# docker-socket-proxy discussion for production Traefik in this session's
-# history — S-0002_T-0005). Not something to flip on silently. If you decide
-# to do it anyway, this is the client-only half — you'd still need to mount
-# /var/run/docker.sock (or run dockerd) at container-start time, outside
-# this Dockerfile:
-#
-# RUN install -m 0755 -d /etc/apt/keyrings \
-#     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
-#     && chmod a+r /etc/apt/keyrings/docker.asc \
-#     && . /etc/os-release \
-#     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
-#     && apt-get update \
-#     && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
-#     && rm -rf /var/lib/apt/lists/*
+# --- Docker CLI (client only — Docker-outside-of-Docker) ---
+# No daemon runs in this container. `docker`/`docker compose` here talk to
+# docker-socket-proxy (see docker-compose.yml) over DOCKER_HOST, not to a raw
+# mounted socket and not to a nested dockerd. The proxy holds the real
+# /var/run/docker.sock and exposes only a scoped subset of the Docker API
+# (containers/images/networks/volumes/build/exec, read+write; swarm/secrets/
+# plugins/system left at its default-deny) — see docker-compose.yml for the
+# exact grants. This still ultimately talks to the *same* host daemon as
+# your own `docker`/`docker compose` on the host — same images, same
+# containers, same everything, just filtered through the proxy.
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && . /etc/os-release \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code and the official Chrome DevTools MCP server globally
 RUN npm install -g @anthropic-ai/claude-code chrome-devtools-mcp
@@ -59,6 +58,8 @@ RUN npm install -g @anthropic-ai/claude-code chrome-devtools-mcp
 # running session). Hand the install tree to `node` so it can update itself.
 RUN chown -R node:node /usr/local/lib/node_modules /usr/local/bin
 
+# Fallback only — docker-compose.yml's `working_dir:` overrides this at
+# runtime to the host-mirrored path (see that file for why).
 WORKDIR /workspace
 
 ENTRYPOINT ["claude"]

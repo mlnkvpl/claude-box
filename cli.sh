@@ -28,7 +28,7 @@ case "$1" in
 
   build)
     echo "Building Claude Code container..."
-    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
     ;;
 
   # Launch isolated Chrome instance and socat forwarder
@@ -51,7 +51,7 @@ case "$1" in
   # One-time interactive OAuth login (subscription auth path)
   login)
     echo "Opening interactive OAuth login inside the container..."
-    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
     ;;
 
   env)
@@ -68,7 +68,7 @@ case "$1" in
           \"$CLAUDE_DIR/cli.sh\" login
           ;;
         *)
-          GID=\$(id -g) docker compose -f \"$CLAUDE_DIR/docker-compose.yml\" run --rm claude \"\$@\"
+          HOST_WORKDIR=\"\$HOME/workdir\" GID=\$(id -g) docker compose -f \"$CLAUDE_DIR/docker-compose.yml\" run --rm claude \"\$@\"
           ;;
       esac
     }
@@ -76,6 +76,6 @@ case "$1" in
     ;;
 
   *)
-    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
     ;;
 esac
