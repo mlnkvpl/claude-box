@@ -7,6 +7,8 @@ if [ -f "$CLAUDE_DIR/.env" ]; then
 fi
 CMD="${CUSTOM_CLI:-claude-box}"
 
+source "$CLAUDE_DIR/scripts/help.sh"
+
 INSTALL_LINE="[ -f \"$CLAUDE_DIR/cli.sh\" ] && source \"$CLAUDE_DIR/cli.sh\" env"
 
 case "$1" in
@@ -29,6 +31,38 @@ case "$1" in
   build)
     echo "Building Claude Code container..."
     HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
+    ;;
+
+  # Show status of this compose file's services. Note docker-socket-proxy is
+  # normally the only thing "up" here — `claude` only exists for the
+  # duration of a `run --rm` invocation (see the default case below), so it
+  # won't show as running between sessions even though the proxy does.
+  ps)
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps
+    ;;
+
+  # Stop running services without removing them (mainly docker-socket-proxy).
+  stop)
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" stop
+    ;;
+
+  # Stop AND remove everything this compose file owns (docker-socket-proxy +
+  # its network). docker-socket-proxy uses `restart: unless-stopped` and is
+  # only ever *started* via `depends_on` on the `claude` service — `run --rm`
+  # removes the `claude` container on exit but never touches its
+  # dependencies, so the proxy otherwise keeps running indefinitely in the
+  # background even with no claude session active. This is the only way to
+  # actually shut it down.
+  down)
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" down
+    ;;
+
+  logs)
+    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" logs -f "${@:2}"
+    ;;
+
+  help|--help|-h)
+    show_help
     ;;
 
   # Launch isolated Chrome instance and socat forwarder
@@ -66,6 +100,21 @@ case "$1" in
           ;;
         login)
           \"$CLAUDE_DIR/cli.sh\" login
+          ;;
+        ps)
+          \"$CLAUDE_DIR/cli.sh\" ps
+          ;;
+        stop)
+          \"$CLAUDE_DIR/cli.sh\" stop
+          ;;
+        down)
+          \"$CLAUDE_DIR/cli.sh\" down
+          ;;
+        logs)
+          \"$CLAUDE_DIR/cli.sh\" logs \"\${@:2}\"
+          ;;
+        help|--help|-h)
+          \"$CLAUDE_DIR/cli.sh\" help
           ;;
         *)
           HOST_WORKDIR=\"\$HOME/workdir\" GID=\$(id -g) docker compose -f \"$CLAUDE_DIR/docker-compose.yml\" run --rm claude \"\$@\"
