@@ -12,8 +12,11 @@ CMD="${CUSTOM_CLI:-claude-box}"
 # ~/workdir itself. Selected via `switch`, persisted in .env, read above.
 export HOST_WORKDIR="$HOME/workdir${WORKDIR_PROJECT:+/$WORKDIR_PROJECT}"
 
+source "$CLAUDE_DIR/scripts/config.sh"
 source "$CLAUDE_DIR/scripts/help.sh"
 source "$CLAUDE_DIR/scripts/switch.sh"
+
+ensure_config "$CLAUDE_DIR"
 
 INSTALL_LINE="[ -f \"$CLAUDE_DIR/cli.sh\" ] && source \"$CLAUDE_DIR/cli.sh\" env"
 
