@@ -150,6 +150,41 @@ claude-box --model claude-sonnet-4-6
 
 ---
 
+## Multiple Projects
+
+`~/workdir` doesn't have to be one flat tree — organize it into subdirectories, one per
+project (e.g. `~/workdir/ululua`, `~/workdir/english`), and switch which one gets
+mounted as the sandbox root:
+
+```bash
+claude-box down            # stop first — a running container's mount won't follow the switch
+claude-box switch ululua   # select the subdirectory
+claude-box                 # relaunch — now mounts ~/workdir/ululua
+```
+
+Run `switch` with no argument to see the current selection and what's available:
+
+```bash
+claude-box switch
+```
+
+Each project is mounted at its own absolute path (`~/workdir/<project>` on both sides,
+same path-mirroring requirement as above), rather than everything collapsing onto a
+shared `~/workdir`. That matters beyond the bind mount itself: Claude Code's own
+session transcripts and project memory are keyed by the absolute working-directory
+path under `/home/node/.claude/projects/`, so giving each project a distinct mount
+path keeps their history and memory from blending together. Project-level
+`CLAUDE.md`, `.claude/skills/`, and `.claude/settings.json` are separated too, simply
+because they live inside whichever subdirectory is currently mounted.
+
+The selection persists in `.env` as `WORKDIR_PROJECT` (empty = mount `~/workdir`
+itself — the original, default behavior). `switch` refuses to run while a `claude`
+container is up, since the active container's bind mount is fixed to whatever it
+resolved at start; switching while it's running would split-brain the running session
+against any new container.
+
+---
+
 ## Troubleshooting
 
 * **Onboarding wizard re-runs every launch / settings keep resetting:**
@@ -190,4 +225,7 @@ Check for a stray `ANTHROPIC_API_KEY` — it silently overrides subscription aut
 Confirm the proxy sidecar is actually running: `docker compose -f ~/claude/docker-compose.yml ps docker-socket-proxy`. If it's not, `depends_on` should have started it automatically on the last `claude-box` invocation — try `~/claude/cli.sh build` again, or bring it up directly with `docker compose -f ~/claude/docker-compose.yml up -d docker-socket-proxy`.
 
 * **A project's `docker compose up` starts containers, but a bind-mounted directory is empty/wrong inside them:**
-`HOST_WORKDIR` wasn't set to the same path on both sides of a volume mount — check `cli.sh`'s invocations still export `HOST_WORKDIR="$HOME/workdir"` before every `docker compose` call, and that `docker-compose.yml`'s `working_dir`/volume lines still reference `${HOST_WORKDIR}`, not a hardcoded alias like `/workspace`. See [Docker access](#docker-access-docker-outside-of-docker) for why this has to match exactly.
+`HOST_WORKDIR` wasn't set to the same path on both sides of a volume mount — check `cli.sh`'s invocations still export `HOST_WORKDIR="$HOME/workdir[/<project>]"` before every `docker compose` call, and that `docker-compose.yml`'s `working_dir`/volume lines still reference `${HOST_WORKDIR}`, not a hardcoded alias like `/workspace`. See [Docker access](#docker-access-docker-outside-of-docker) for why this has to match exactly.
+
+* **`claude-box switch` succeeds but the container still seems to mount the old directory:**
+A running container's bind mount is fixed to whatever it resolved at container start — it won't notice a later `.env` change. Make sure `claude-box down` ran (or the container was already stopped) before switching, then start a fresh session.

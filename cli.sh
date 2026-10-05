@@ -4,8 +4,13 @@ CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -f "$CLAUDE_DIR/.env" ]; then
   CUSTOM_CLI=$(grep -E '^CLI_NAME=' "$CLAUDE_DIR/.env" | cut -d '=' -f2- | tr -d '"'\'' ')
+  WORKDIR_PROJECT=$(grep -E '^WORKDIR_PROJECT=' "$CLAUDE_DIR/.env" | cut -d '=' -f2- | tr -d '"'\'' ')
 fi
 CMD="${CUSTOM_CLI:-claude-box}"
+
+# Which ~/workdir subdirectory to mount as the sandbox root — empty mounts
+# ~/workdir itself. Selected via `switch`, persisted in .env, read above.
+export HOST_WORKDIR="$HOME/workdir${WORKDIR_PROJECT:+/$WORKDIR_PROJECT}"
 
 source "$CLAUDE_DIR/scripts/help.sh"
 
@@ -30,7 +35,7 @@ case "$1" in
 
   build)
     echo "Building Claude Code container..."
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
     ;;
 
   # Show status of this compose file's services. Note docker-socket-proxy is
@@ -38,12 +43,12 @@ case "$1" in
   # duration of a `run --rm` invocation (see the default case below), so it
   # won't show as running between sessions even though the proxy does.
   ps)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps
     ;;
 
   # Stop running services without removing them (mainly docker-socket-proxy).
   stop)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" stop
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" stop
     ;;
 
   # Stop AND remove everything this compose file owns (docker-socket-proxy +
@@ -54,11 +59,45 @@ case "$1" in
   # background even with no claude session active. This is the only way to
   # actually shut it down.
   down)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" down
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" down
     ;;
 
   logs)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" logs -f "${@:2}"
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" logs -f "${@:2}"
+    ;;
+
+  # Select which ~/workdir subdirectory gets mounted as the sandbox root.
+  # Persisted in .env as WORKDIR_PROJECT, read at the top of this script —
+  # each project gets its own absolute mount path, so Claude Code's
+  # session transcripts/memory (keyed by cwd under ~/.claude/projects/)
+  # stay separate per project instead of blending together.
+  switch)
+    PROJECT="$2"
+
+    if [ -z "$PROJECT" ]; then
+      CURRENT="${WORKDIR_PROJECT:-<none — mounting $HOME/workdir root>}"
+      echo "Current project: $CURRENT"
+      echo "Available: $(find "$HOME/workdir" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
+      exit 0
+    fi
+
+    if [ ! -d "$HOME/workdir/$PROJECT" ]; then
+      echo "[✗] $HOME/workdir/$PROJECT does not exist." >&2
+      exit 1
+    fi
+
+    if [ -n "$(GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps --status running -q claude 2>/dev/null)" ]; then
+      echo "[✗] A claude container is running — stop it first: ${CMD} down" >&2
+      exit 1
+    fi
+
+    [ -f "$CLAUDE_DIR/.env" ] || cp "$CLAUDE_DIR/.env.tpl" "$CLAUDE_DIR/.env"
+    if grep -qE '^WORKDIR_PROJECT=' "$CLAUDE_DIR/.env"; then
+      sed -i "s|^WORKDIR_PROJECT=.*|WORKDIR_PROJECT=$PROJECT|" "$CLAUDE_DIR/.env"
+    else
+      echo "WORKDIR_PROJECT=$PROJECT" >> "$CLAUDE_DIR/.env"
+    fi
+    echo "[✓] Switched to '$PROJECT' — mounting $HOME/workdir/$PROJECT"
     ;;
 
   help|--help|-h)
@@ -85,7 +124,7 @@ case "$1" in
   # One-time interactive OAuth login (subscription auth path)
   login)
     echo "Opening interactive OAuth login inside the container..."
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
     ;;
 
   env)
@@ -116,8 +155,11 @@ case "$1" in
         help|--help|-h)
           \"$CLAUDE_DIR/cli.sh\" help
           ;;
+        switch)
+          \"$CLAUDE_DIR/cli.sh\" switch \"\${@:2}\"
+          ;;
         *)
-          HOST_WORKDIR=\"\$HOME/workdir\" GID=\$(id -g) docker compose -f \"$CLAUDE_DIR/docker-compose.yml\" run --rm claude \"\$@\"
+          \"$CLAUDE_DIR/cli.sh\" \"\$@\"
           ;;
       esac
     }
@@ -125,6 +167,6 @@ case "$1" in
     ;;
 
   *)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
     ;;
 esac

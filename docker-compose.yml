@@ -34,7 +34,8 @@ services:
     # i.e. on the host's filesystem. If the container-side path didn't match
     # the host-side path, those mounts would silently point at a
     # nonexistent/empty host directory instead of the real project files.
-    # cli.sh exports HOST_WORKDIR="$HOME/workdir" before every invocation.
+    # cli.sh exports HOST_WORKDIR="$HOME/workdir[/<project>]" before every
+    # invocation — the optional project suffix comes from `switch`.
     working_dir: ${HOST_WORKDIR}
     stdin_open: true
     tty: true

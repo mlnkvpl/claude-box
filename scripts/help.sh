@@ -20,6 +20,11 @@ show_help()
   printf '  %-12s %s\n' ""     "background between sessions"
   printf '  %-12s %s\n\n' "logs [service]" "Follow logs"
 
+  printf 'Workdir:\n'
+  printf '  %-12s %s\n' "switch" "Show current project + available subdirectories of ~/workdir"
+  printf '  %-12s %s\n' "switch <name>" "Mount ~/workdir/<name> as the sandbox root instead of"
+  printf '  %-12s %s\n\n' ""   "~/workdir itself (container must be down first)"
+
   printf 'Setup:\n'
   printf '  %-12s %s\n' "build" "Build/rebuild the Docker image"
   printf '  %-12s %s\n' "login" "One-time interactive OAuth login (subscription auth)"
