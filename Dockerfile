@@ -10,12 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         jq ripgrep shellcheck python3 python3-yaml libnss3-tools gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# PHP 8.3 CLI + Composer — matches ululua/docker/api/Dockerfile.fpm's runtime
-# version, so `php -l`, `composer validate`, etc. run against the same PHP
-# this project actually deploys on, not whatever Debian's default happens to
-# ship. Sury's repo is the standard way to get a specific modern PHP version
-# on Debian; using /etc/os-release instead of lsb_release since slim images
-# don't include lsb-release by default.
+# PHP 8.3 CLI + Composer — matches this workspace's actual runtime version,
+# so `php -l`, `composer validate`, etc. run against the same PHP the real
+# app deploys on, not whatever Debian's default happens to ship. Sury's repo
+# is the standard way to get a specific modern PHP version on Debian; using
+# /etc/os-release instead of lsb_release since slim images don't include
+# lsb-release by default.
 RUN curl -sSL https://packages.sury.org/php/apt.gpg -o /etc/apt/trusted.gpg.d/php.gpg \
     && . /etc/os-release \
     && echo "deb https://packages.sury.org/php/ ${VERSION_CODENAME} main" > /etc/apt/sources.list.d/php.list \

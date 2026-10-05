@@ -3,7 +3,7 @@ services:
   # itself; `claude` never sees it directly — it only talks to this proxy
   # over DOCKER_HOST. Grants write access to containers/images/networks/
   # volumes/build/exec (what `docker compose up`, `docker exec`, etc. inside
-  # ululua's/traefik's own CLIs actually need); everything else (swarm,
+  # a project's own CLI actually needs); everything else (swarm,
   # secrets, plugins, system, nodes, services, tasks, configs) stays at the
   # proxy's default-deny. See cli.sh's chosen invocations for the exact
   # commands this needs to cover.
@@ -29,7 +29,7 @@ services:
     # not a convenience alias like /workspace. Docker-outside-of-Docker means
     # `docker compose` run in here is ultimately executed by the HOST's own
     # daemon (via docker-socket-proxy) — it resolves any relative bind mount
-    # in a compose file (e.g. ululua's `./projects/api:/var/www/html`)
+    # in a compose file (e.g. a project's `./projects/api:/var/www/html`)
     # against whatever this working directory string means to THAT daemon,
     # i.e. on the host's filesystem. If the container-side path didn't match
     # the host-side path, those mounts would silently point at a

@@ -13,6 +13,7 @@ It isolates the agent strictly inside your `~/workdir` projects, shields your ho
 * **Persistent Configuration:** Claude Code splits its persistent state across two locations, both of which must be mounted:
   * `~/claude/.config/claude/` → `/home/node/.claude` — session transcripts, project memory.
   * `~/claude/.config/claude.json` → `/home/node/.claude.json` — global settings, onboarding state, auth. This is a **file**, not a folder; mounting only the directory leaves this absent and the onboarding wizard re-runs (and resets preferences) on every container start.
+  * Both mounts are a single shared tree — not scoped per `switch`ed project. See [Multiple Projects](#multiple-projects) below for what that means for auth and history.
 * **Safe Host Browser Bridge:** Controls your host Chrome instance over the Chrome DevTools Protocol (CDP). A lightweight `socat` bridge forwards container traffic (`172.17.0.1:9223`) to Chrome's local loopback listener (`127.0.0.1:9222`), bypassing Chrome's DNS-rebinding security checks while keeping the container sandboxed.
 * **Scoped Docker access (Docker-outside-of-Docker):** The agent can run `docker`/`docker compose` — needed to actually build/run/test the projects under `~/workdir` — without a raw mounted socket or a nested daemon. A `docker-socket-proxy` sidecar holds the real `/var/run/docker.sock` and exposes only a filtered subset of the Docker API (containers/images/networks/volumes/build/exec, read+write; swarm/secrets/plugins/system left denied) over `DOCKER_HOST`. This is still root-equivalent-*ish* access, scoped down rather than eliminated — see [Docker access](#docker-access-docker-outside-of-docker) below before relying on it as a hard security boundary.
 * **Host-mirrored workspace path:** `~/workdir` is bind-mounted at the *same absolute path* inside the container (`$HOME/workdir`), not a convenience alias like `/workspace`. This isn't cosmetic — Docker-outside-of-Docker means `docker compose` run inside the agent is executed by the *host's* daemon, which resolves any relative bind mount in a compose file (e.g. `./projects/api:/var/www/html`) against its own filesystem. A mismatched path here silently mounts the wrong (or an empty) host directory instead of your real project files.
@@ -153,13 +154,13 @@ claude-box --model claude-sonnet-4-6
 ## Multiple Projects
 
 `~/workdir` doesn't have to be one flat tree — organize it into subdirectories, one per
-project (e.g. `~/workdir/ululua`, `~/workdir/english`), and switch which one gets
+project (e.g. `~/workdir/project-a`, `~/workdir/project-b`), and switch which one gets
 mounted as the sandbox root:
 
 ```bash
-claude-box down            # stop first — a running container's mount won't follow the switch
-claude-box switch ululua   # select the subdirectory
-claude-box                 # relaunch — now mounts ~/workdir/ululua
+claude-box down              # stop first — a running container's mount won't follow the switch
+claude-box switch project-a  # select the subdirectory
+claude-box                   # relaunch — now mounts ~/workdir/project-a
 ```
 
 Run `switch` with no argument to see the current selection and what's available:
@@ -176,6 +177,21 @@ path under `/home/node/.claude/projects/`, so giving each project a distinct mou
 path keeps their history and memory from blending together. Project-level
 `CLAUDE.md`, `.claude/skills/`, and `.claude/settings.json` are separated too, simply
 because they live inside whichever subdirectory is currently mounted.
+
+**What stays global across every project:** `switch` only ever rewrites
+`WORKDIR_PROJECT` in `.env`, which changes `HOST_WORKDIR` — the bind-mounted workdir
+path. It does not touch the `.config/claude` / `.config/claude.json` mounts in
+`docker-compose.yml`, which are hardcoded to one shared location regardless of
+project. In practice:
+* **Auth is global.** `claude-box login` (or `CLAUDE_CODE_OAUTH_TOKEN`/
+  `ANTHROPIC_API_KEY`) only needs to happen once, ever — switching projects never
+  requires logging in again.
+* **Session transcripts/project memory live in one shared tree**, naturally
+  partitioned into per-project subfolders only because Claude Code itself keys
+  `~/.claude/projects/` by the absolute cwd path (which changes with
+  `HOST_WORKDIR`). There's no per-project isolation at the `.claude` mount level
+  beyond that — global settings and any other top-level state in `~/.claude.json`
+  apply uniformly to every project you switch to.
 
 The selection persists in `.env` as `WORKDIR_PROJECT` (empty = mount `~/workdir`
 itself — the original, default behavior). `switch` refuses to run while a `claude`

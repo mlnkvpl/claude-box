@@ -30,8 +30,13 @@ Create the setup directory:
 mkdir -p ~/claude/.config/claude ~/claude/scripts
 cd ~/claude
 chmod 700 .config
-echo '{}' > .config/claude.json
 ```
+
+`cli.sh` calls `ensure_config` (see `scripts/config.sh` below) on every invocation, which
+creates `.config/claude/` and `.config/claude.json` automatically if either is missing —
+so the only thing you still need to do by hand is the `chmod 700 .config` above, before
+anything gets mounted into the container. (If you want to pre-create the file anyway:
+`echo '{}' > .config/claude.json`.)
 
 ### `Dockerfile`
 
@@ -123,7 +128,8 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     # Must match the host-side volume path exactly — see the note in
     # "Architecture & Security Boundary" above (Host-mirrored workspace path).
-    # cli.sh exports HOST_WORKDIR="$HOME/workdir" before every invocation.
+    # cli.sh exports HOST_WORKDIR="$HOME/workdir[/<project>]" before every
+    # invocation — the optional project suffix comes from `switch`.
     working_dir: ${HOST_WORKDIR}
     stdin_open: true
     tty: true
@@ -141,6 +147,12 @@ services:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
       - DOCKER_HOST=tcp://docker-socket-proxy:2375
 ```
+
+Note that the `.config/claude` and `.config/claude.json` mounts above are fixed paths —
+they are **not** scoped by `WORKDIR_PROJECT`. Switching projects (see `scripts/switch.sh`
+below) only changes `HOST_WORKDIR`; auth and Claude Code's global settings stay shared
+across every project you switch to. See README.md's "Multiple Projects" section for what
+that implies.
 
 ### `.mcp.json`
 
@@ -162,12 +174,16 @@ Project-scoped MCP config. Claude Code picks this up automatically from the work
 
 ### `.env`
 
-Fill in **one** of the two auth variables (leave the other blank — see [Authentication](../README.md#authentication--pick-one)):
+Fill in **one** of the two auth variables (leave the other blank — see [Authentication](../README.md#authentication--pick-one)). Leave `WORKDIR_PROJECT` blank initially; it's written by `claude-box switch`, not by hand:
 
 ```ini
 ANTHROPIC_API_KEY=""
 CLAUDE_CODE_OAUTH_TOKEN=""
 CLI_NAME="claude-box"
+# Subdirectory of ~/workdir to mount as the sandbox root, e.g. "project-a".
+# Empty mounts ~/workdir itself. Set via `claude-box switch <project>`,
+# not by hand.
+WORKDIR_PROJECT=
 ```
 
 ### `cli.sh`
@@ -179,10 +195,19 @@ CLAUDE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -f "$CLAUDE_DIR/.env" ]; then
   CUSTOM_CLI=$(grep -E '^CLI_NAME=' "$CLAUDE_DIR/.env" | cut -d '=' -f2- | tr -d '"'\'' ')
+  WORKDIR_PROJECT=$(grep -E '^WORKDIR_PROJECT=' "$CLAUDE_DIR/.env" | cut -d '=' -f2- | tr -d '"'\'' ')
 fi
 CMD="${CUSTOM_CLI:-claude-box}"
 
+# Which ~/workdir subdirectory to mount as the sandbox root — empty mounts
+# ~/workdir itself. Selected via `switch`, persisted in .env, read above.
+export HOST_WORKDIR="$HOME/workdir${WORKDIR_PROJECT:+/$WORKDIR_PROJECT}"
+
+source "$CLAUDE_DIR/scripts/config.sh"
 source "$CLAUDE_DIR/scripts/help.sh"
+source "$CLAUDE_DIR/scripts/switch.sh"
+
+ensure_config "$CLAUDE_DIR"
 
 INSTALL_LINE="[ -f \"$CLAUDE_DIR/cli.sh\" ] && source \"$CLAUDE_DIR/cli.sh\" env"
 
@@ -205,7 +230,7 @@ case "$1" in
 
   build)
     echo "Building Claude Code container..."
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" build
     ;;
 
   # Show status of this compose file's services. Note docker-socket-proxy is
@@ -213,12 +238,12 @@ case "$1" in
   # duration of a `run --rm` invocation (see the default case below), so it
   # won't show as running between sessions even though the proxy does.
   ps)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps
     ;;
 
   # Stop running services without removing them (mainly docker-socket-proxy).
   stop)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" stop
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" stop
     ;;
 
   # Stop AND remove everything this compose file owns (docker-socket-proxy +
@@ -229,11 +254,21 @@ case "$1" in
   # background even with no claude session active. This is the only way to
   # actually shut it down.
   down)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" down
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" down
     ;;
 
   logs)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" logs -f "${@:2}"
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" logs -f "${@:2}"
+    ;;
+
+  # Select which ~/workdir subdirectory gets mounted as the sandbox root.
+  # Persisted in .env as WORKDIR_PROJECT, read at the top of this script —
+  # each project gets its own absolute mount path, so Claude Code's
+  # session transcripts/memory (keyed by cwd under ~/.claude/projects/)
+  # stay separate per project instead of blending together. Logic lives in
+  # scripts/switch.sh, sourced above.
+  switch)
+    switch_workdir "$2"
     ;;
 
   help|--help|-h)
@@ -260,7 +295,7 @@ case "$1" in
   # One-time interactive OAuth login (subscription auth path)
   login)
     echo "Opening interactive OAuth login inside the container..."
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm --entrypoint claude claude /login
     ;;
 
   env)
@@ -291,8 +326,11 @@ case "$1" in
         help|--help|-h)
           \"$CLAUDE_DIR/cli.sh\" help
           ;;
+        switch)
+          \"$CLAUDE_DIR/cli.sh\" switch \"\${@:2}\"
+          ;;
         *)
-          HOST_WORKDIR=\"\$HOME/workdir\" GID=\$(id -g) docker compose -f \"$CLAUDE_DIR/docker-compose.yml\" run --rm claude \"\$@\"
+          \"$CLAUDE_DIR/cli.sh\" \"\$@\"
           ;;
       esac
     }
@@ -300,9 +338,77 @@ case "$1" in
     ;;
 
   *)
-    HOST_WORKDIR="$HOME/workdir" GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
+    GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" run --rm claude "$@"
     ;;
 esac
+```
+
+### `scripts/config.sh`
+
+Sourced by `cli.sh`; provides `ensure_config`, called once at the top of every `cli.sh`
+invocation to auto-create `.config/claude/` and `.config/claude.json` if either is
+missing, and to fail loudly instead of silently misbehaving if Docker ever created
+`claude.json` as a directory (which happens if it's referenced in a bind mount before
+the file exists on the host):
+
+```bash
+#!/usr/bin/env bash
+
+ensure_config() {
+  local base="$1/.config"
+  mkdir -p "$base/claude"
+  if [ -d "$base/claude.json" ]; then
+    echo "error: $base/claude.json is a directory (created by Docker). Fix: sudo rm -rf $base && rerun" >&2
+    exit 1
+  fi
+  [ -f "$base/claude.json" ] || echo '{}' > "$base/claude.json"
+}
+```
+
+### `scripts/switch.sh`
+
+Sourced by `cli.sh`; provides `switch_workdir`, backing the `switch` subcommand. Relies
+on `$CLAUDE_DIR`, `$CMD`, and `$WORKDIR_PROJECT`, all set earlier in `cli.sh`:
+
+```bash
+#!/usr/bin/env bash
+#
+# `switch` subcommand logic. Sourced by cli.sh; relies on $CLAUDE_DIR, $CMD,
+# and $WORKDIR_PROJECT (read from .env at the top of cli.sh).
+#
+
+switch_workdir()
+{
+  local PROJECT="$1"
+
+  if [ -z "$PROJECT" ]; then
+    local CURRENT="${WORKDIR_PROJECT:-<none — mounting $HOME/workdir root>}"
+    echo "Current project: $CURRENT"
+    echo "Available: $(find "$HOME/workdir" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
+    return 0
+  fi
+
+  if [ ! -d "$HOME/workdir/$PROJECT" ]; then
+    echo "[✗] $HOME/workdir/$PROJECT does not exist." >&2
+    return 1
+  fi
+
+  if [ -n "$(GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps --status running -q claude 2>/dev/null)" ]; then
+    echo "[✗] A claude container is running — stop it first: ${CMD} down" >&2
+    return 1
+  fi
+
+  [ -f "$CLAUDE_DIR/.env" ] || cp "$CLAUDE_DIR/.env.tpl" "$CLAUDE_DIR/.env"
+  if grep -qE '^WORKDIR_PROJECT=' "$CLAUDE_DIR/.env"; then
+    sed -i "s|^WORKDIR_PROJECT=.*|WORKDIR_PROJECT=$PROJECT|" "$CLAUDE_DIR/.env"
+  else
+    # A pre-existing .env not ending in a newline would otherwise merge
+    # this onto the previous line (e.g. CLI_NAME="x"WORKDIR_PROJECT=y).
+    [ -n "$(tail -c1 "$CLAUDE_DIR/.env" 2>/dev/null)" ] && echo >> "$CLAUDE_DIR/.env"
+    echo "WORKDIR_PROJECT=$PROJECT" >> "$CLAUDE_DIR/.env"
+  fi
+  echo "[✓] Switched to '$PROJECT' — mounting $HOME/workdir/$PROJECT"
+}
 ```
 
 ### `scripts/help.sh`
@@ -331,6 +437,11 @@ show_help()
   printf '  %-12s %s\n' ""     "network) — the proxy otherwise keeps running in the"
   printf '  %-12s %s\n' ""     "background between sessions"
   printf '  %-12s %s\n\n' "logs [service]" "Follow logs"
+
+  printf 'Workdir:\n'
+  printf '  %-12s %s\n' "switch" "Show current project + available subdirectories of ~/workdir"
+  printf '  %-12s %s\n' "switch <name>" "Mount ~/workdir/<name> as the sandbox root instead of"
+  printf '  %-12s %s\n\n' ""   "~/workdir itself (container must be down first)"
 
   printf 'Setup:\n'
   printf '  %-12s %s\n' "build" "Build/rebuild the Docker image"
