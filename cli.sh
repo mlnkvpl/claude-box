@@ -13,6 +13,7 @@ CMD="${CUSTOM_CLI:-claude-box}"
 export HOST_WORKDIR="$HOME/workdir${WORKDIR_PROJECT:+/$WORKDIR_PROJECT}"
 
 source "$CLAUDE_DIR/scripts/help.sh"
+source "$CLAUDE_DIR/scripts/switch.sh"
 
 INSTALL_LINE="[ -f \"$CLAUDE_DIR/cli.sh\" ] && source \"$CLAUDE_DIR/cli.sh\" env"
 
@@ -70,34 +71,10 @@ case "$1" in
   # Persisted in .env as WORKDIR_PROJECT, read at the top of this script —
   # each project gets its own absolute mount path, so Claude Code's
   # session transcripts/memory (keyed by cwd under ~/.claude/projects/)
-  # stay separate per project instead of blending together.
+  # stay separate per project instead of blending together. Logic lives in
+  # scripts/switch.sh, sourced above.
   switch)
-    PROJECT="$2"
-
-    if [ -z "$PROJECT" ]; then
-      CURRENT="${WORKDIR_PROJECT:-<none — mounting $HOME/workdir root>}"
-      echo "Current project: $CURRENT"
-      echo "Available: $(find "$HOME/workdir" -mindepth 1 -maxdepth 1 -type d -printf '%f ' 2>/dev/null)"
-      exit 0
-    fi
-
-    if [ ! -d "$HOME/workdir/$PROJECT" ]; then
-      echo "[✗] $HOME/workdir/$PROJECT does not exist." >&2
-      exit 1
-    fi
-
-    if [ -n "$(GID=$(id -g) docker compose -f "$CLAUDE_DIR/docker-compose.yml" ps --status running -q claude 2>/dev/null)" ]; then
-      echo "[✗] A claude container is running — stop it first: ${CMD} down" >&2
-      exit 1
-    fi
-
-    [ -f "$CLAUDE_DIR/.env" ] || cp "$CLAUDE_DIR/.env.tpl" "$CLAUDE_DIR/.env"
-    if grep -qE '^WORKDIR_PROJECT=' "$CLAUDE_DIR/.env"; then
-      sed -i "s|^WORKDIR_PROJECT=.*|WORKDIR_PROJECT=$PROJECT|" "$CLAUDE_DIR/.env"
-    else
-      echo "WORKDIR_PROJECT=$PROJECT" >> "$CLAUDE_DIR/.env"
-    fi
-    echo "[✓] Switched to '$PROJECT' — mounting $HOME/workdir/$PROJECT"
+    switch_workdir "$2"
     ;;
 
   help|--help|-h)
